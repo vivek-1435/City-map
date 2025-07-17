@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Modern City Map</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            margin: 0;
+        }
+        #container {
+            width: 100vw;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background-color: rgba(40, 40, 40, 0.9);
+            padding: 1rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            color: #f0f0f0;
+            max-width: 300px;
+            z-index: 10;
+        }
+        #infoBox {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background-color: rgba(40, 40, 40, 0.9);
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            color: #f0f0f0;
+            display: none;
+            max-width: 300px;
+            z-index: 10;
+        }
+        select, button {
+            background-color: #333;
+            color: #f0f0f0;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            width: 100%;
+            margin-top: 0.5rem;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover:not(:disabled) {
+            background-color: #4CAF50;
+        }
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+        .path-info {
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            color: #a0a0a0;
+        }
+        .label {
+            color: #fff;
+            font-size: 14px;
+            position: absolute;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 2px 5px;
+            border-radius: 3px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-900">
+
+    <div id="container"></div>
+
+    <div id="controls">
+        <h1 class="text-2xl font-bold mb-4 text-white">3D City Navigator</h1>
+        <div class="mb-4">
+            <label for="startNode" class="text-sm font-medium">Start Location:</label>
+            <select id="startNode"></select>
+        </div>
+        <div class="mb-4">
+            <label for="endNode" class="text-sm font-medium">End Location:</label>
+            <select id="endNode"></select>
+        </div>
+        <button id="findPathBtn">Find Shortest Path</button>
+        <div id="pathResult" class="path-info"></div>
+    </div>
+
+    <div id="infoBox">
+        <h3 id="infoName" class="text-lg font-bold"></h3>
+        <p id="infoDesc" class="text-sm"></p>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script type="module">
+        import { OrbitControls } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/controls/OrbitControls.js';
+
+        let scene, camera, renderer, controls, clock;
+        let raycaster, mouse;
+        let directionalLight;
+
+        let nodes = [];
+        let edges = [];
+        let nodeObjects = [];
+        let edgeObjects = [];
+        let labels = [];
+        
+        let hoveredNode = null;
+        let selectedPath = [];
+        let carObject = null;
+        let isAnimating = false;
+
+        const cityData = {
+            locations: [
+                { id: 0, name: "City Hall", description: "The administrative center of the city.", x: 0, y: 5, z: 0 },
+                { id: 1, name: "Central Park", description: "A large urban park with lakes and trails.", x: 150, y: 5, z: -50 },
+                { id: 2, name: "Tech Hub", description: "Home to major tech companies and startups.", x: -100, y: 5, z: -150 },
+                { id: 3, name: "University", description: "A leading institution for higher education.", x: -200, y: 5, z: 100 },
+                { id: 4, name: "Arts District", description: "Galleries, theaters, and street art.", x: 200, y: 5, z: 150 },
+                { id: 5, name: "Financial Center", description: "Skyscrapers and banking headquarters.", x: 350, y: 5, z: 0 },
+                { id: 6, name: "Shopping Mall", description: "A large mall with various retail stores.", x: 50, y: 5, z: 200 },
+                { id: 7, name: "Residential Area", description: "Suburban housing and local shops.", x: -250, y: 5, z: -100 },
+                { id: 8, name: "International Airport", description: "The main air travel hub.", x: 450, y: 5, z: -200 },
+                { id: 9, name: "Historic Old Town", description: "Preserved architecture from the city's founding.", x: 250, y: 5, z: -150 },
+            ],
+            roads: [
+                { from: 0, to: 1 }, { from: 0, to: 2 }, { from: 0, to: 3 },
+                { from: 1, to: 2 }, { from: 1, to: 9 }, { from: 1, to: 5 },
+                { from: 2, to: 7 }, { from: 2, to: 9 },
+                { from: 3, to: 6 }, { from: 3, to: 7 },
+                { from: 4, to: 5 }, { from: 4, to: 6 },
+                { from: 5, to: 8 }, { from: 5, to: 9 },
+                { from: 8, to: 9 }
+            ]
+        };
+        
+        class Graph {
+            constructor() { this.nodes = new Map(); }
+            addNode(id, data) { this.nodes.set(id, { ...data, adj: new Set() }); }
+            addEdge(node1Id, node2Id) {
+                if (this.nodes.has(node1Id) && this.nodes.has(node2Id)) {
+                    this.nodes.get(node1Id).adj.add(node2Id);
+                    this.nodes.get(node2Id).adj.add(node1Id);
+                }
+            }
+            dijkstra(startId, endId) {
+                let distances = {};
+                let prev = {};
+                let pq = new PriorityQueue();
+                distances[startId] = 0;
+                pq.enqueue(startId, 0);
+                this.nodes.forEach((_, id) => {
+                    if (id !== startId) distances[id] = Infinity;
+                    prev[id] = null;
+                });
+                while (!pq.isEmpty()) {
+                    let { element: minNode } = pq.dequeue();
+                    if (minNode === endId) {
+                        let path = [];
+                        let current = endId;
+                        while (current !== null) {
+                            path.unshift(current);
+                            current = prev[current];
+                        }
+                        return path;
+                    }
+                    if (minNode !== null && distances[minNode] !== Infinity) {
+                        this.nodes.get(minNode).adj.forEach(neighbor => {
+                            let node1 = this.nodes.get(minNode);
+                            let node2 = this.nodes.get(neighbor);
+                            let weight = new THREE.Vector3(node1.x, node1.y, node1.z).distanceTo(new THREE.Vector3(node2.x, node2.y, node2.z));
+                            let newDist = distances[minNode] + weight;
+                            if (newDist < distances[neighbor]) {
+                                distances[neighbor] = newDist;
+                                prev[neighbor] = minNode;
+                                pq.enqueue(neighbor, newDist);
+                            }
+                        });
+                    }
+                }
+                return [];
+            }
+        }
+        class PriorityQueue {
+            constructor() { this.collection = []; }
+            enqueue(element, priority) {
+                let contain = false;
+                for (let i = 0; i < this.collection.length; i++) {
+                    if (this.collection[i].priority > priority) {
+                        this.collection.splice(i, 0, { element, priority });
+                        contain = true;
+                        break;
+                    }
+                }
+                if (!contain) { this.collection.push({ element, priority }); }
+            }
+            dequeue() { return this.collection.shift(); }
+            isEmpty() { return this.collection.length === 0; }
+        }
+        const cityGraph = new Graph();
+
+        function init() {
+            clock = new THREE.Clock();
+            const container = document.getElementById('container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            scene.fog = new THREE.Fog(0x87ceeb, 800, 2000);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 3000);
+            camera.position.set(0, 250, 400);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            container.appendChild(renderer.domElement);
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 50;
+            controls.maxDistance = 1200;
+            controls.maxPolarAngle = Math.PI / 2.1;
+            const ambientLight = new THREE.AmbientLight(0xcccccc, 1);
+            scene.add(ambientLight);
+            directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            directionalLight.position.set(100, 200, 100);
+            scene.add(directionalLight);
+            const planeGeometry = new THREE.PlaneGeometry(3000, 3000);
+            const planeMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.9 });
+            const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+            plane.rotation.x = -Math.PI / 2;
+            scene.add(plane);
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            // Add Trees
+            const numberOfTrees = 300;
+            for (let i = 0; i < numberOfTrees; i++) {
+                const x = Math.random() * 2500 - 1250;
+                const z = Math.random() * 2500 - 1250;
+                if (Math.abs(x) > 50 || Math.abs(z) > 50) {
+                    scene.add(createTree(new THREE.Vector3(x, 0, z)));
+                }
+            }
+            
+             // Add Animals
+            const numberOfAnimals = 40;
+            for (let i = 0; i < numberOfAnimals; i++) {
+                const x = Math.random() * 1500 - 750;
+                const z = Math.random() * 1500 - 750;
+                 if (Math.abs(x) > 200 && Math.abs(z) > 200) { // Place them further out
+                    scene.add(createAnimal(new THREE.Vector3(x, 0, z)));
+                }
+            }
+
+            // Add Mountains
+            const numberOfMountains = 25;
+            for (let i = 0; i < numberOfMountains; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const radius = 1000 + Math.random() * 500;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                scene.add(createMountain(new THREE.Vector3(x, 0, z)));
+            }
+
+            // Add Ponds
+            const numberOfPonds = 15;
+            for (let i = 0; i < numberOfPonds; i++) {
+                const x = Math.random() * 2000 - 1000;
+                const z = Math.random() * 2000 - 1000;
+                // Avoid placing ponds on the central city area
+                if (Math.sqrt(x*x + z*z) > 600) {
+                    scene.add(createPond(new THREE.Vector3(x, 0, z)));
+                }
+            }
+
+
+            // Create models, graph nodes, and labels
+            cityData.locations.forEach(loc => {
+                cityGraph.addNode(loc.id, loc);
+                nodes.push(loc);
+                const model = createLocationModel(loc);
+                model.position.set(loc.x, loc.y, loc.z);
+                model.userData = loc;
+                scene.add(model);
+                nodeObjects.push(model);
+                const labelDiv = document.createElement('div');
+                labelDiv.className = 'label';
+                labelDiv.textContent = loc.name;
+                container.appendChild(labelDiv);
+                labels.push({div: labelDiv, pos: model.position});
+            });
+
+            // Create roads
+            cityData.roads.forEach(road => {
+                cityGraph.addEdge(road.from, road.to);
+                edges.push(road);
+                const fromNode = nodes.find(n => n.id === road.from);
+                const toNode = nodes.find(n => n.id === road.to);
+                const material = new THREE.LineBasicMaterial({ color: 0x646464, linewidth: 2 });
+                const points = [
+                    new THREE.Vector3(fromNode.x, fromNode.y, fromNode.z),
+                    new THREE.Vector3(toNode.x, toNode.y, toNode.z)
+                ];
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                const line = new THREE.Line(geometry, material);
+                line.userData = road;
+                scene.add(line);
+                edgeObjects.push(line);
+            });
+
+            // Create Car object
+            carObject = createCarModel();
+            carObject.visible = false;
+            scene.add(carObject);
+            
+            // Populate UI
+            const startNodeSelect = document.getElementById('startNode');
+            const endNodeSelect = document.getElementById('endNode');
+            nodes.forEach(node => {
+                startNodeSelect.innerHTML += `<option value="${node.id}">${node.name}</option>`;
+                endNodeSelect.innerHTML += `<option value="${node.id}">${node.name}</option>`;
+            });
+            endNodeSelect.selectedIndex = 1;
+
+            // Event Listeners
+            document.getElementById('findPathBtn').addEventListener('click', findPath);
+            window.addEventListener('resize', onWindowResize);
+            renderer.domElement.addEventListener('mousemove', onMouseMove);
+            renderer.domElement.addEventListener('click', onClick);
+
+            animate();
+        }
+        
+        function createLocationModel(loc) {
+            const geometry = new THREE.SphereGeometry(8, 32, 32);
+            const material = new THREE.MeshStandardMaterial({ color: 0x4a90e2 });
+            return new THREE.Mesh(geometry, material);
+        }
+
+        function createCarModel() {
+            const car = new THREE.Group();
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.5 });
+            const bodyGeo = new THREE.BoxGeometry(10, 4, 20);
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 4;
+            car.add(body);
+            const cabinMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.2 });
+            const cabinGeo = new THREE.BoxGeometry(8, 4, 12);
+            const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+            cabin.position.y = 8;
+            cabin.position.z = -2;
+            car.add(cabin);
+            const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            const wheelGeo = new THREE.CylinderGeometry(2, 2, 2, 16);
+            const wheel1 = new THREE.Mesh(wheelGeo, wheelMat);
+            wheel1.rotation.z = Math.PI / 2;
+            wheel1.position.set(6, 2, 6);
+            car.add(wheel1);
+            const wheel2 = wheel1.clone();
+            wheel2.position.x = -6;
+            car.add(wheel2);
+            const wheel3 = wheel1.clone();
+            wheel3.position.z = -6;
+            car.add(wheel3);
+            const wheel4 = wheel2.clone();
+            wheel4.position.z = -6;
+            car.add(wheel4);
+            return car;
+        }
+
+        function createTree(position) {
+            const trunkHeight = 10 + Math.random() * 5;
+            const trunkGeo = new THREE.CylinderGeometry(0.5, 1, trunkHeight, 8);
+            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+            const leavesHeight = 10 + Math.random() * 5;
+            const leavesGeo = new THREE.ConeGeometry(5, leavesHeight, 8);
+            const leavesMat = new THREE.MeshStandardMaterial({ color: 0x006400 });
+            const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+            leaves.position.y = trunkHeight / 2 + leavesHeight / 2;
+            const tree = new THREE.Group();
+            tree.add(trunk);
+            tree.add(leaves);
+            tree.position.set(position.x, trunkHeight / 2, position.z);
+            return tree;
+        }
+
+        function createAnimal(position) {
+            const animal = new THREE.Group();
+            const bodyGeo = new THREE.BoxGeometry(8, 4, 4);
+            const bodyMat = new THREE.MeshStandardMaterial({color: 0x964B00});
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            animal.add(body);
+            // Simple legs
+            const legGeo = new THREE.CylinderGeometry(0.5, 0.5, 4);
+            const leg1 = new THREE.Mesh(legGeo, bodyMat);
+            leg1.position.set(3, -4, 1.5);
+            animal.add(leg1);
+            const leg2 = leg1.clone();
+            leg2.position.x = -3;
+            animal.add(leg2);
+            const leg3 = leg1.clone();
+            leg3.position.z = -1.5;
+            animal.add(leg3);
+            const leg4 = leg2.clone();
+            leg4.position.z = -1.5;
+            animal.add(leg4);
+            animal.position.set(position.x, 6, position.z);
+            animal.rotation.y = Math.random() * Math.PI * 2;
+            return animal;
+        }
+
+        function createMountain(position) {
+            const height = 100 + Math.random() * 400;
+            const radius = 150 + Math.random() * 100;
+            const geo = new THREE.ConeGeometry(radius, height, 7);
+            const mat = new THREE.MeshStandardMaterial({ color: 0x695442, flatShading: true });
+            const mountain = new THREE.Mesh(geo, mat);
+            mountain.position.set(position.x, height / 2 - 1, position.z);
+            return mountain;
+        }
+
+        function createPond(position) {
+            const radius = 30 + Math.random() * 40;
+            const geo = new THREE.CircleGeometry(radius, 32);
+            const mat = new THREE.MeshStandardMaterial({ color: 0x1ca3ec, transparent: true, opacity: 0.6 });
+            const pond = new THREE.Mesh(geo, mat);
+            pond.rotation.x = -Math.PI / 2;
+            pond.position.set(position.x, 0.1, position.z);
+            return pond;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            updateLabels();
+            renderer.render(scene, camera);
+        }
+
+        function updateLabels() {
+            labels.forEach(labelData => {
+                const tempV = new THREE.Vector3().copy(labelData.pos);
+                tempV.project(camera);
+                const x = (tempV.x * .5 + .5) * renderer.domElement.clientWidth;
+                const y = (tempV.y * -.5 + .5) * renderer.domElement.clientHeight;
+                labelData.div.style.transform = `translate(-50%, -50%) translate(${x}px, ${y + 20}px)`;
+            });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onMouseMove(event) {
+            event.preventDefault();
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(nodeObjects);
+            if (intersects.length > 0) {
+                const intersectedObject = intersects[0].object;
+                if (hoveredNode !== intersectedObject) {
+                    if (hoveredNode) {
+                        const originalColor = selectedPath.includes(hoveredNode.userData.id) ? 0xff0000 : 0x4a90e2;
+                        hoveredNode.material.color.setHex(originalColor);
+                    }
+                    hoveredNode = intersectedObject;
+                    hoveredNode.material.color.setHex(0xffffff);
+                    document.body.style.cursor = 'pointer';
+                }
+            } else {
+                if (hoveredNode) {
+                    const originalColor = selectedPath.includes(hoveredNode.userData.id) ? 0xff0000 : 0x4a90e2;
+                    hoveredNode.material.color.setHex(originalColor);
+                    hoveredNode = null;
+                    document.body.style.cursor = 'default';
+                }
+            }
+        }
+        
+        function onClick(event) {
+            const infoBox = document.getElementById('infoBox');
+            if (hoveredNode) {
+                document.getElementById('infoName').textContent = hoveredNode.userData.name;
+                document.getElementById('infoDesc').textContent = hoveredNode.userData.description;
+                infoBox.style.display = 'block';
+            } else {
+                infoBox.style.display = 'none';
+            }
+        }
+
+        function findPath() {
+            if (isAnimating) return;
+            // Reset colors
+            nodeObjects.forEach(obj => obj.material.color.setHex(0x4a90e2));
+            edgeObjects.forEach(obj => obj.material.color.setHex(0x646464));
+
+            const startId = parseInt(document.getElementById('startNode').value);
+            const endId = parseInt(document.getElementById('endNode').value);
+            const pathResultDiv = document.getElementById('pathResult');
+            if (startId === endId) {
+                selectedPath = [];
+                pathResultDiv.textContent = "Start and end locations are the same.";
+                return;
+            }
+            selectedPath = cityGraph.dijkstra(startId, endId);
+            if (selectedPath.length > 1) {
+                const pathNames = selectedPath.map(id => nodes.find(n => n.id === id).name).join(' → ');
+                pathResultDiv.innerHTML = `<strong>Path:</strong> ${pathNames}`;
+                selectedPath.forEach(nodeId => {
+                    const nodeObj = nodeObjects.find(obj => obj.userData.id === nodeId);
+                    if(nodeObj) nodeObj.material.color.setHex(0xff0000); // Changed to red
+                });
+                for (let i = 0; i < selectedPath.length - 1; i++) {
+                    const from = selectedPath[i];
+                    const to = selectedPath[i+1];
+                    const edgeObj = edgeObjects.find(obj => (obj.userData.from === from && obj.userData.to === to) || (obj.userData.from === to && obj.userData.to === from));
+                    if(edgeObj) edgeObj.material.color.setHex(0xff0000); // Changed to red
+                }
+                startCarAnimation(selectedPath);
+            } else {
+                pathResultDiv.textContent = "No path found between these locations.";
+            }
+        }
+
+        function startCarAnimation(path) {
+            isAnimating = true;
+            document.getElementById('findPathBtn').disabled = true;
+            carObject.visible = true;
+            let segmentIndex = 0;
+            let progress = 0;
+            const speed = 0.01;
+            function animateCar() {
+                if (segmentIndex >= path.length - 1) {
+                    isAnimating = false;
+                    document.getElementById('findPathBtn').disabled = false;
+                    setTimeout(() => { carObject.visible = false; }, 2000);
+                    return;
+                }
+                const startNodeData = nodes.find(n => n.id === path[segmentIndex]);
+                const endNodeData = nodes.find(n => n.id === path[segmentIndex + 1]);
+                const startVec = new THREE.Vector3(startNodeData.x, startNodeData.y, startNodeData.z);
+                const endVec = new THREE.Vector3(endNodeData.x, endNodeData.y, endNodeData.z);
+                progress += speed;
+                if (progress >= 1.0) {
+                    progress = 0;
+                    segmentIndex++;
+                }
+                if (segmentIndex < path.length - 1) {
+                    carObject.position.lerpVectors(startVec, endVec, progress);
+                    // Orient the car to look at the next point
+                    carObject.lookAt(endVec);
+                }
+                requestAnimationFrame(animateCar);
+            }
+            animateCar();
+        }
+
+        init();
+    </script>
+</body>
+</html>
